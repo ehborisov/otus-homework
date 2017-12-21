@@ -47,14 +47,12 @@ CONFIG_ERROR_THRESHOLD = 'ERROR_PERCENTAGE_THRESHOLD'
 REPORT_DECIMAL_FIELDS = ['count_perc', 'time_sum', 'time_perc', 'time_avg',
                          'time_max', 'time_med']
 
-config = {
-        'REPORT_SIZE': 1000,
-        'REPORT_DIR': '/Users/eborisov/study/data/python_course/hw1/reports',
-        'LOG_DIR': '/Users/eborisov/study/data/python_course/hw1/log',
-        'TIMESTAMP_PATH': '/var/tmp/log_analyzer.ts',
-        'LOGFILE_PATH': '/var/tmp/log_analyzer.log',
-        'ERROR_PERCENTAGE_THRESHOLD': 0.05,
-}
+config = {'REPORT_SIZE': 1000,
+          'REPORT_DIR': '/Users/eborisov/study/data/python_course/hw1/reports',
+          'LOG_DIR': '/Users/eborisov/study/data/python_course/hw1/log',
+          'TIMESTAMP_PATH': '/var/tmp/log_analyzer.ts',
+          'LOGFILE_PATH': '/var/tmp/log_analyzer.log',
+          'ERROR_PERCENTAGE_THRESHOLD': 0.05}
 
 
 def find_latest_log_entry():
