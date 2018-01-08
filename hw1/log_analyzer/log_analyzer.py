@@ -11,6 +11,7 @@ import gzip
 import datetime
 from statistics import median
 from collections import defaultdict
+from collections import namedtuple
 import json
 import time
 import argparse
@@ -47,18 +48,22 @@ CONFIG_ERROR_THRESHOLD = 'ERROR_PERCENTAGE_THRESHOLD'
 REPORT_DECIMAL_FIELDS = ['count_perc', 'time_sum', 'time_perc', 'time_avg',
                          'time_max', 'time_med']
 
-config = {'REPORT_SIZE': 1000,
-          'REPORT_DIR': '/Users/eborisov/study/data/python_course/hw1/reports',
-          'LOG_DIR': '/Users/eborisov/study/data/python_course/hw1/log',
-          'TIMESTAMP_PATH': '/var/tmp/log_analyzer.ts',
-          'LOGFILE_PATH': '/var/tmp/log_analyzer.log',
-          'ERROR_PERCENTAGE_THRESHOLD': 0.05}
+LogEntry = namedtuple('LogEntry', ['logfile', 'date'])
+
+DEFAULT_CONFIG = {
+    'REPORT_SIZE': 1000,
+    'REPORT_DIR': '/Users/eborisov/study/data/python_course/hw1/reports',
+    'LOG_DIR': '/Users/eborisov/study/data/python_course/hw1/log',
+    'TIMESTAMP_PATH': '/var/tmp/log_analyzer.ts',
+    'LOGFILE_PATH': '',
+    'ERROR_PERCENTAGE_THRESHOLD': 0.05
+}
 
 
-def find_latest_log_entry():
+def find_latest_log_entry(log_dir):
     latest_date = None
     latest_log = None
-    for f in os.listdir(config[CONFIG_LOGDIR_KEY]):
+    for f in os.listdir(log_dir):
         match = LOG_FILENAME_PATTERN.match(f)
         if match:
             date_str, gzip_ext = match.groups()
@@ -66,92 +71,47 @@ def find_latest_log_entry():
             if not latest_date or date > latest_date:
                 latest_date = date
                 latest_log = f
-    return latest_log, latest_date
+    if not latest_log:
+        raise Exception('Couldn\'t find any log entries to '
+                        'process in specified log directory.')
+    return LogEntry(os.path.join(log_dir, latest_log), latest_date)
 
 
-def check_report_exists(report_date):
-    date_str = report_date.strftime(REPORT_DATE_PATTERN)
-    report = os.path.join(config[CONFIG_REPORT_DIR_KEY],
-                          REPORT_FILE_FORMAT % date_str)
-    report_exists = os.path.exists(report)
-    timestamp_exists = os.path.exists(config[CONFIG_TIMESTAMP_KEY])
-    if not report_exists or not timestamp_exists:
-        logging.info('Report or timestamp files do not exist,'
-                     ' generating report.')
-        return False
-    try:
-        with open(config[CONFIG_TIMESTAMP_KEY]) as f:
-            timestamp = int(f.read())
-    except (IOError, ValueError) as e:
-        logging.exception(e)
-        logging.warning('Couldn\'t parce timestamp from timestamp file at'
-                        ' %s. Regenerating the report.',
-                        config[CONFIG_TIMESTAMP_KEY])
-        return False
-    date_from_timestamp = datetime.datetime.fromtimestamp(timestamp)
-    today = datetime.datetime.now()
-    logging.info('Previous report timestamp is %s.', date_from_timestamp)
-    return date_from_timestamp.date() == today.date()
-
-
-def extract_data_from_log(logfile):
+def extract_data_from_log(log_lines, error_threshold):
     time_per_request = defaultdict(list)
-    path = os.path.join(config[CONFIG_LOGDIR_KEY], logfile)
-    if logfile.endswith('gz'):
-        logging.info('Parsing log from gzip log file %s.', path)
-        f = gzip.open(path, encoding='utf-8')
-    else:
-        logging.info('Parsing logfile %s.', path)
-        f = open(path, encoding='utf-8')
     bad_lines_count = 0
     lines_conunt = 0
-    try:
-        for line in f.readlines():
-            lines_conunt += 1
-            match = LOG_LINE_PATTERN.match(line)
-            if not match:
-                bad_lines_count += 1
-                continue
-            remote_addr, remote_user, http_x_real_ip, time_local, \
-            request, status, body_bytes_sent, http_referer, \
-            http_user_agent, http_x_forwarded_for, http_X_REQUEST_ID, \
-            http_X_RB_USER, request_time = match.groups()
-
-            request_details = request.split(" ")
-            if len(request_details) < 2:
-                bad_lines_count += 1
-                continue
-            method, url = request_details[0:2]
-            time_per_request[url].append(float(request_time))
-    except IOError as e:
-        logging.exception('Couldn\'t read from logfile %s: %s', path, e)
-        raise
-    finally:
-        f.close()
+    for line in log_lines:
+        lines_conunt += 1
+        match = LOG_LINE_PATTERN.match(line)
+        if not match:
+            bad_lines_count += 1
+            continue
+        request, request_time = match.groups()[4], match.groups()[12]
+        request_details = request.split(" ")
+        if len(request_details) < 2:
+            bad_lines_count += 1
+            continue
+        method, url = request_details[0:2]
+        time_per_request[url].append(float(request_time))
     errors_ratio = bad_lines_count / lines_conunt
-    threshold = config[CONFIG_ERROR_THRESHOLD]
-    if errors_ratio > threshold:
+    if errors_ratio > error_threshold:
         msg = (' %0.2f percent of lines of the log that weren\'t parsed '
                'exceeds the threshold of %0.2f. Terminating.' %
-               (errors_ratio * 100, threshold * 100))
+               (errors_ratio * 100, error_threshold * 100))
         logging.warning(msg)
         sys.exit(msg)
     return time_per_request
 
 
-def prepare_report_data(time_per_request):
-    report_size = config[CONFIG_REPORT_SIZE_KEY]
-    time_sums = {url: sum(timings) for url, timings
-                 in time_per_request.items()}
-    total_hits_count = sum(len(x) for x in time_per_request.values())
+def prepare_report_data(time_per_request, report_size):
+    time_sums = {}
+    total_hits_count = 0
+    for url, timings in time_per_request.items():
+        time_sums[url] = sum(timings)
+        total_hits_count += len(timings)
     total_time = sum(time_sums.values())
     url_count = len(time_per_request)
-    if url_count < report_size:
-        logging.warning('Requested report size is greater than actual count'
-                        ' of unique urls.')
-        report_limit = url_count
-    else:
-        report_limit = report_size
     report_data = []
     for url, timings in time_per_request.items():
         count = len(timings)
@@ -165,24 +125,18 @@ def prepare_report_data(time_per_request):
             {'count': count, 'count_perc': count_perc, 'time_sum': time_sum,
              'time_perc': time_perc, 'time_avg': time_avg,
              'time_max': time_max, 'time_med': time_med, 'url': url})
-    logging.info('Collected report data for %s urls, limiting to %s',
-                 url_count, report_limit)
+    logging.info('Collected report data for %s urls.', url_count)
     return sorted(report_data, reverse=True,
-                  key=lambda r: r['time_sum'])[0:report_limit]
+                  key=lambda r: r['time_sum'])[0:report_size]
 
 
-def generate_report_from_template(report_data, date):
+def generate_report_from_template(template_path, report_path, report_data):
     try:
-        path = os.path.join(config[CONFIG_REPORT_DIR_KEY],
-                            REPORT_TEMPLATE_FILE)
-        with open(path) as f:
+        with open(template_path) as f:
             template = f.read()
         report_table = json.dumps(report_data)
         report = template.replace(TEMPLATE_REPLACEMENT_STRING,
                                   report_table)
-        report_data = date.strftime(REPORT_DATE_PATTERN)
-        report_file = REPORT_FILE_FORMAT % report_data
-        report_path = os.path.join(config[CONFIG_REPORT_DIR_KEY], report_file)
         logging.info('Generating report file to %s', report_path)
         with open(report_path, 'w') as f:
             f.write(report)
@@ -191,20 +145,22 @@ def generate_report_from_template(report_data, date):
         raise
 
 
-def build_report():
-    latest_log, latest_date = find_latest_log_entry()
-    if not latest_log:
-        raise Exception('Couldn\'t find any log entries to '
-                        'process in specified log directory.')
-    report_exists = check_report_exists(latest_date)
-    if report_exists:
-        logging.info('Report for the latest log entry %s already exists.',
-                     latest_log)
-        return
-    else:
-        request_timings = extract_data_from_log(latest_log)
-        report_data = prepare_report_data(request_timings)
-        generate_report_from_template(report_data, latest_date)
+def build_report(config, template_path, log_entry, report_path):
+        is_zipped = log_entry.logfile.endswith('gz')
+        with gzip.open(log_entry.logfile, encoding='utf-8') if \
+                is_zipped else open(log_entry.logfile, encoding='utf-8') as f:
+            try:
+                log_lines = (line for line in f)
+                threshold = config[CONFIG_ERROR_THRESHOLD]
+                request_timings = extract_data_from_log(log_lines, threshold)
+            except IOError as e:
+                logging.exception('Couldn\'t read from logfile %s: %s',
+                                  log_entry.logfile, e)
+                raise
+            report_data = prepare_report_data(request_timings,
+                                              config[CONFIG_REPORT_SIZE_KEY])
+            generate_report_from_template(template_path, report_path,
+                                          report_data)
 
 
 def read_config_from_file(config_path):
@@ -220,15 +176,24 @@ def read_config_from_file(config_path):
             'Couldn\'t parse config file json', e)
 
 
-def validate_configuration():
+def validate_configuration(config):
     logs_dir = config[CONFIG_LOGDIR_KEY]
     if not os.path.exists(logs_dir):
         raise Exception('Logs directory %s does not exist.'
                         % logs_dir)
     report_dir = config[CONFIG_REPORT_DIR_KEY]
     if not os.path.exists(report_dir):
-        raise Exception('Reports directory %s does not exist.'
-                        % report_dir)
+        logging.info('Reports directory does not exist, creating a new one.')
+        try:
+            os.mkdir(report_dir)
+        except Exception:
+            logging.error("Couldn't create reports directory.")
+            raise
+    report_template = os.path.join(config[CONFIG_REPORT_DIR_KEY],
+                                   REPORT_TEMPLATE_FILE)
+    if not os.path.exists(report_template):
+        raise Exception('Report template file cannot be found at %s.',
+                        report_template)
     try:
         int(config[CONFIG_REPORT_SIZE_KEY])
     except ValueError as e:
@@ -236,39 +201,56 @@ def validate_configuration():
                         ' integer.' % CONFIG_REPORT_SIZE_KEY, e)
 
 
-def write_timestamp_file():
-    with open(config[CONFIG_TIMESTAMP_KEY], 'w') as f:
+def write_timestamp_file(path):
+    with open(path, 'w') as f:
         now = datetime.datetime.now()
         timestamp_str = str(int(time.mktime(now.timetuple())))
         f.write(timestamp_str)
 
 
-def configure_logger():
-    logging.basicConfig(filename=config[CONFIG_LOGFILE_KEY], level=logging.INFO,
-                        format='[%(asctime)s] %(levelname).1s %(message)s',
-                        datefmt='%Y.%m.%d %H:%M:%S')
+def configure_logger(log_file_path):
+    config_args = {
+        'level': logging.INFO,
+        'format': '[%(asctime)s] %(levelname).1s %(message)s',
+        'datefmt': '%Y.%m.%d %H:%M:%S'
+    }
+    if log_file_path:
+        config_args['filename'] = log_file_path
+    logging.basicConfig(**config_args)
 
 
 def get_args():
     parser = argparse.ArgumentParser(
         description='Log analyzer commandline client')
     parser.add_argument('--config', nargs='?', type=str,
+                        default='/usr/local/etc/log_analyzer.conf',
                         help='Path to the config file.'
-                             ' E.g. /usr/local/etc/log_analyzer.conf')
+                             'Default is /usr/local/etc/log_analyzer.conf')
     return parser.parse_args()
 
 
 def main():
     args = get_args()
+    config = DEFAULT_CONFIG.copy()
     try:
         if args.config:
             print('Getting config file from %s ' % args.config)
             overrides = read_config_from_file(args.config)
             config.update(overrides)
-        validate_configuration()
-        configure_logger()
-        build_report()
-        write_timestamp_file()
+        configure_logger(config[CONFIG_LOGFILE_KEY])
+        validate_configuration(config)
+        log_entry = find_latest_log_entry(config[CONFIG_LOGDIR_KEY])
+        date_str = log_entry.date.strftime(REPORT_DATE_PATTERN)
+        report_dir = config[CONFIG_REPORT_DIR_KEY]
+        report_path = os.path.join(report_dir, REPORT_FILE_FORMAT % date_str)
+        if os.path.exists(report_path):
+            logging.info('Report for the latest log entry %s already '
+                         'exists.' % log_entry.logfile)
+            sys.exit(0)
+        template_path = os.path.join(config[CONFIG_REPORT_DIR_KEY],
+                                     REPORT_TEMPLATE_FILE)
+        build_report(config, template_path, log_entry, report_path)
+        write_timestamp_file(config[CONFIG_TIMESTAMP_KEY])
     except Exception as e:
         logging.exception(e)
         sys.exit('Log analyzer finished with error: ' + str(e))
