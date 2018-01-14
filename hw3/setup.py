@@ -5,7 +5,8 @@ setup_config = {
     'author': 'Borisov Egor',
     'version': '1.0',
     'packages': ['scoring_server'],
-    'install_requires': [],
+    'install_requires': ['parameterized', 'python-memcached', 'mock',
+                         'retrying'],
     'name': 'scoring_server'
 }
 

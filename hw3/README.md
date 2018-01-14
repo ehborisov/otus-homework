@@ -11,6 +11,10 @@ To start a local server run (--log specifies a file to output server logs)
 
     python scoring_server/api.py --log /tmp/log.txt
 
+Start a memcached container:
+
+    docker run --name test-memcached -d -p 11211:11211 memcached
+
 The server has one main endpoint `method` that provides two different
 functions depending on a `method` parameter in the request:
 

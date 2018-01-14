@@ -13,6 +13,7 @@ from optparse import OptionParser
 from abc import abstractproperty, abstractmethod
 
 import scoring
+from store import Store
 
 CLIENTS_INTERESTS_METHOD = 'clients_interests'
 
@@ -126,8 +127,8 @@ class EmailField(CharField):
 
 class PhoneField(CheckedRequestField):
     conditions = [
-        (lambda value: isinstance(value, basestring) or
-                       isinstance(value, numbers.Number),
+        (lambda value: isinstance(value, basestring) or isinstance(
+            value, numbers.Number),
          "'%s' request field must be of a number or a char type."),
         (lambda value: len(str(value)) == PHONE_LENGTH,
          "'%s' request field must contain a valid 11 digit phone."),
@@ -145,8 +146,8 @@ class DateField(CheckedRequestField):
 
 class BirthDayField(DateField):
     conditions = [
-        (lambda v: datetime.now().year -
-                   datetime.strptime(v, DATE_PATTERN).year <= MAX_AGE,
+        (lambda v: datetime.now().year - datetime.strptime(
+            v, DATE_PATTERN).year <= MAX_AGE,
          "'%s' request field is invalid - too old ʕ •ᴥ•ʔ╭∩╮."),
     ]
 
@@ -164,8 +165,7 @@ class ClientIDsField(CheckedRequestField):
     conditions = [
         (lambda value: isinstance(value, list),
          "'%s' request field must be a list."),
-        (lambda value: any(isinstance(x, numbers.Number)
-                           for x in value),
+        (lambda value: all(isinstance(x, numbers.Number) for x in value),
          "'%s' request field must contain only numeric ids."),
     ]
 
@@ -187,7 +187,7 @@ class BaseRequest(object):
                 logging.info('Got unknown param in request: %s=%s', param, arg)
 
     @abstractmethod
-    def handle(self, base_request, ctx, store):
+    def handle(self, base_request, ctx, cache_store):
         raise NotImplementedError('Subclasses of BaseRequest should implement '
                                   'handle method.')
 
@@ -196,11 +196,11 @@ class ClientsInterestsRequest(BaseRequest):
     client_ids = ClientIDsField(required=True)
     date = DateField(required=False, nullable=True)
 
-    def handle(self, base_request, ctx, store):
+    def handle(self, base_request, ctx, cache_store):
         ctx['nclients'] = len(self.client_ids)
         response = {}
         for client_id in self.client_ids:
-            response[client_id] = scoring.get_interests(store, client_id)
+            response[client_id] = scoring.get_interests(cache_store, client_id)
         return response, OK
 
 
@@ -212,14 +212,15 @@ class OnlineScoreRequest(BaseRequest):
     birthday = BirthDayField(required=False, nullable=True)
     gender = GenderField(required=False, nullable=True)
 
-    def handle(self, base_request, ctx, store):
+    def handle(self, base_request, ctx, cache_store):
         ctx['has'] = base_request.arguments.keys()
         if base_request.is_admin:
             score = 42
         else:
-            score = scoring.get_score(store, self.phone, self.email,
-                                      self.birthday, self.gender,
-                                      self.first_name, self.last_name)
+            date = datetime.strptime(self.birthday, DATE_PATTERN)
+            score = scoring.get_score(cache_store, self.phone, self.email,
+                                      date, self.gender, self.first_name,
+                                      self.last_name)
         response = {'score': score}
         return response, OK
 
@@ -247,7 +248,7 @@ class MethodRequest(BaseRequest):
             return True
         return False
 
-    def handle(self, base_request, ctx, store):
+    def handle(self, base_request, ctx, cache_store):
         if not self.check_auth():
             return 'Invalid token', FORBIDDEN
         if self.method == CLIENTS_INTERESTS_METHOD:
@@ -256,18 +257,19 @@ class MethodRequest(BaseRequest):
             method_request = OnlineScoreRequest(**self.arguments)
         else:
             return 'Unknown method', INVALID_REQUEST
-        return method_request.handle(self, ctx, store)
+        return method_request.handle(self, ctx, cache_store)
 
 
-def main_method_handler(request_params, ctx, store):
-    return MethodRequest(**request_params['body']).handle(None, ctx, store)
+def main_method_handler(request_params, ctx, cache_store):
+    return MethodRequest(**request_params['body']).handle(None, ctx,
+                                                          cache_store)
 
 
 class MainHTTPHandler(BaseHTTPRequestHandler):
     router = {
         "method": main_method_handler
     }
-    store = None
+    cache_store = Store()
 
     def get_request_id(self, headers):
         return headers.get('HTTP_X_REQUEST_ID', uuid.uuid4().hex)
@@ -290,7 +292,7 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
                 try:
                     response, code = self.router[path](
                         {"body": request_dict, "headers": self.headers},
-                        context, self.store)
+                        context, self.cache_store)
                 except (TypeError, ValueError) as e:
                     logging.exception(e)
                     code = INVALID_REQUEST
@@ -327,6 +329,7 @@ if __name__ == "__main__":
                         format='[%(asctime)s] %(levelname).1s %(message)s',
                         datefmt='%Y.%m.%d %H:%M:%S')
     server = HTTPServer(("localhost", opts.port), MainHTTPHandler)
+
     logging.info("Starting server at %s" % opts.port)
     try:
         server.serve_forever()
