@@ -65,8 +65,7 @@ class LogisticRegression:
         if append_bias:
             X = LogisticRegression.append_biases(X)
         dotp = -X.dot(self.w)
-        sig = np.vectorize(lambda x: 1 / (1 + math.exp(x)))
-        p_1 = sig(dotp)
+        p_1 = 1 / (1 + np.exp(dotp))
         p_0 = np.subtract(1, p_1)
         return np.transpose(np.vstack((p_0, p_1)))
 
