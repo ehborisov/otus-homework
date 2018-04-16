@@ -2,8 +2,6 @@ import numpy as np
 import math
 from scipy import sparse
 
-SIGMOID = np.vectorize(lambda x: 1 / (1 + math.exp(-x)))
-
 
 class LogisticRegression:
     def __init__(self):
@@ -66,8 +64,9 @@ class LogisticRegression:
         """
         if append_bias:
             X = LogisticRegression.append_biases(X)
-        dotp = X.dot(self.w)
-        p_1 = SIGMOID(dotp)
+        dotp = -X.dot(self.w)
+        sig = np.vectorize(lambda x: 1 / (1 + math.exp(x)))
+        p_1 = sig(dotp)
         p_0 = np.subtract(1, p_1)
         return np.transpose(np.vstack((p_0, p_1)))
 
@@ -85,9 +84,7 @@ class LogisticRegression:
         """
 
         y_proba = self.predict_proba(X, append_bias=True)
-        get_label = lambda x: 0 if x[0] > x[1] else 1
-        y_pred = np.apply_along_axis(get_label, 1, y_proba)
-        return y_pred
+        return np.greater(y_proba[:, 0], y_proba[:, 1]).astype(int)
 
     def loss(self, X_batch, y_batch, reg):
         """Logistic Regression loss function
@@ -100,17 +97,17 @@ class LogisticRegression:
         - loss as single float
         - gradient with respect to weights w; an array of same shape as w
         """
-        cost_at_point = lambda x: x[1]*math.log(x[0]) + (1-x[1])*math.log(1-x[0])
-        dotp = X_batch.dot(self.w)
-
-        odds = SIGMOID(dotp)
-        odds_with_labels = np.transpose(np.vstack((odds, y_batch)))
-        loss = - np.sum(np.apply_along_axis(cost_at_point, 1, odds_with_labels))
-        dw = np.asarray(X_batch.transpose().multiply(odds-y_batch).sum(1)).flatten()
+        dotp = -X_batch.dot(self.w)
+        odds = 1 / (1 + np.exp(dotp))
+        y_batch = np.array(y_batch)
+        loss = - np.sum(y_batch * np.log(odds) + (1 - y_batch) * np.log(1 - odds))
+        dw = X_batch.T.dot(odds - y_batch)
 
         sample_size = X_batch.shape[0]
-        avg_loss = loss/sample_size + (reg/2*sample_size)*np.sum(np.square(self.w))
-        avg_grad = np.divide(dw, sample_size) + (reg/sample_size)*self.w
+        avg_loss = loss/sample_size + (reg/2*sample_size)*(self.w[:-1].dot(self.w[:-1]))
+        reg = (reg/sample_size * self.w[:-1])
+        reg = np.append(reg, 0)  # exclude bias term
+        avg_grad = dw / sample_size + reg
         return avg_loss, avg_grad
 
     @staticmethod
