@@ -43,8 +43,5 @@ response example:
 
 Tests
 -----
-You can execute unit tests from commandline via
-
-    python -m unittest scoring_server/tests/test.py
-
-or by invoking `tox`, that will also perform a flake8 lint check.
+You can execute unit tests by invoking `tox` (tox-docker plugin is used to start a memcached container to use for
+integration tests), that will also invoke a flake8 lint check.

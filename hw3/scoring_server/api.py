@@ -179,7 +179,7 @@ class BaseRequest(object):
         missing_required_fields = self._required.difference(set(kwargs.keys()))
         if missing_required_fields:
             raise TypeError('Request does not have required fields: %s' %
-                            ', '.join(missing_required_fields))
+                            ', '.join(sorted(missing_required_fields)))
         for param, arg in kwargs.iteritems():
             if param in self._known_fields:
                 setattr(self, param, arg)

@@ -5,10 +5,14 @@ import unittest
 import parameterized
 from mock import MagicMock
 import copy
-import test_constants
 
-from hw3.scoring_server import api
-from hw3.scoring_server import store
+from . import test_constants
+from scoring_server import api
+from scoring_server import store
+
+
+class RequestStub(object):
+    pass
 
 
 class ApiTests(unittest.TestCase):
@@ -28,7 +32,7 @@ class ApiTests(unittest.TestCase):
 
     def test_empty_request(self):
         expected_message = ('Request does not have required fields: '
-                            'arguments, login, account, token, method')
+                            'account, arguments, login, method, token')
         with self.assertRaisesRegexp(TypeError, expected_message):
             _, code = self.get_response({})
 
@@ -116,39 +120,43 @@ class ApiTests(unittest.TestCase):
                                                 'required fields: client_ids'):
             self.get_response(request)
 
+
+class FieldsTests(unittest.TestCase):
+
     @parameterized.parameterized.expand([
-        ('first_name_is_invalid', {'first_name': 1},
-         "'first_name' request param must be of a char type"),
+        ('first_name_is_invalid', api.CharField, 1,
+         "'field' request param must be of a char type"),
 
-        ('last_name_is_invalid', {'last_name': 1},
-         "'last_name' request param must be of a char type"),
+        ('last_name_is_invalid', api.CharField, 1,
+         "'field' request param must be of a char type"),
 
-        ('email_is_invalid', {'email': 'zzzzz'},
-         "'email' request param must be a sting containing '@' symbol."),
+        ('email_is_invalid', api.EmailField, 'zzzzz',
+         "'field' request param must be a sting containing '@' symbol."),
 
-        ('phone_is_invalid_len', {'phone': 333},
-         "'phone' request field must contain a valid 11 digit phone."),
+        ('phone_is_invalid_len', api.PhoneField, 333,
+         "'field' request field must contain a valid 11 digit phone."),
 
-        ('phone_is_invalid_len', {'phone': 12345678901},
-         "'phone' request field must be a phone number starting with 7"),
+        ('phone_is_invalid_starting_number', api.PhoneField, 12345678901,
+         "'field' request field must be a phone number starting with 7"),
 
-        ('too_old', {'birthday': '01.01.1930'},
-         "'birthday' request field is invalid - too old ʕ •ᴥ•ʔ╭∩╮."),
+        ('too_old', api.BirthDayField, '01.01.1930',
+         "'field' request field is invalid - too old ʕ •ᴥ•ʔ╭∩╮."),
 
-        ('birthday_is_invalid', {'birthday': '01.13.1930'},
+        ('birthday_is_invalid', api.BirthDayField, '01.13.1930',
          "time data '01.13.1930' does not match format '%d.%m.%Y'"),
 
-        ('gender_is_invalid', {'gender': '@'},
-         "'gender' request field must be a number."),
+        ('gender_is_invalid', api.GenderField, '@',
+         "'field' request field must be a number."),
 
-        ('gender_is_unknown', {'gender': 666},
-         "'gender' request field is an unknown gender code."),
+        ('gender_is_unknown', api.GenderField, 666,
+         "'field' request field is an unknown gender code."),
     ])
-    def test_score_request_params_validation(self, _, params, expected_error):
-        request = copy.deepcopy(test_constants.VALID_SCORE_REQUEST)
-        request['arguments'].update(params)
+    def test_score_request_params_validation(self, _, field_class, value, expected_error):
         with self.assertRaisesRegexp(ValueError, expected_error):
-            self.get_response(request)
+            field = field_class()
+            field.name = 'field'
+            field.__set__(RequestStub(), value)
+
 
 
 if __name__ == "__main__":

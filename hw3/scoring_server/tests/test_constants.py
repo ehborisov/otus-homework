@@ -1,6 +1,6 @@
 import datetime
 import hashlib
-from hw3.scoring_server import api
+from scoring_server import api
 
 VALID_TOKEN = '178a72ced8d6581bc798d502288f9d29dd211c49231588656a1e72bc0123425d894808d42be9627d589b45851061173be3b215f44e503d0edc89ec6a6e65280f'  # noqa
 
