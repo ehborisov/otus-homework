@@ -28,6 +28,16 @@ PLAIN_TEXT_EMPTY_CONTENT = [
 ]
 
 
+class Error(Exception):
+    """Parent exception class for server module."""
+    pass
+
+
+class BadRequestError(Error):
+    """Request has an unexpected structure and is not parseable."""
+    pass
+
+
 class HttpCode(Enum):
     BAD_REQUEST = (400, 'Bad Request')
     OK = (200, 'OK')
@@ -126,6 +136,8 @@ class DIYHTTPServer(object):
             address = client_writer.get_extra_info('peername')
             logging.info('Accepted connection from %s.', address)
             raw_request = None
+            content = None
+            headers = PLAIN_TEXT_EMPTY_CONTENT
             while True:
                 try:
                     raw_request = await reader.readuntil(
@@ -137,38 +149,39 @@ class DIYHTTPServer(object):
             try:
                 method, resource, response_headers = self._tokenize_request(
                     raw_request)
-            except Exception:
-                response = _generate_response_lines(HttpCode.BAD_REQUEST,
-                                                    PLAIN_TEXT_EMPTY_CONTENT)
-                client_writer.write(response)
-                await client_writer.drain()
-                return
-            try:
                 path = _parse_path(resource)
-                if method == 'GET':
-                    self._write_get_or_head_response(
-                        client_writer, path, response_headers, with_body=True)
-                elif method == 'HEAD':
-                    self._write_get_or_head_response(
-                        client_writer, path, response_headers, with_body=False)
+                if method in ['GET', 'HEAD']:
+                    code, headers = self._create_get_or_head_response(
+                        path, response_headers)
+                    if method == 'GET':
+                        with open(os.path.join(self.root, path), 'rb') as fd:
+                            try:
+                                content = self._read_data(fd)
+                            except IOError:
+                                logging.error('Error on reading requested file %s contents.', path)
+                                raise
                 else:
-                    response = _generate_response_lines(
-                        HttpCode.NOT_ALLOWED, PLAIN_TEXT_EMPTY_CONTENT)
-                    client_writer.write(response)
+                    code = HttpCode.NOT_ALLOWED
+            except BadRequestError as e:
+                logging.exception(e)
+                code = HttpCode.BAD_REQUEST
             except Exception as e:
                 logging.exception(e)
-                response = _generate_response_lines(HttpCode.SERVER_ERROR,
-                                                    PLAIN_TEXT_EMPTY_CONTENT)
-                client_writer.write(response)
+                code = HttpCode.SERVER_ERROR
+            client_writer.write(_generate_response_lines(code, headers))
+            if content:
+                client_writer.write(content)
             await client_writer.drain()
 
     def _tokenize_request(self, raw_request):
+        if not raw_request:
+            raise Exception('Error on reading request data, no data was read')
         decoded_request = raw_request.decode('utf-8')
         lines = decoded_request.split(RESPONSE_LINE_ENDING)
         request_line, header_lines = lines[0], lines[1:]
         request_args = request_line.split()
         if len(request_args) < 2:
-            raise Exception('Cannot tokenize request line: %s' % request_line)
+            raise BadRequestError('Cannot tokenize request line: %s' % request_line)
         method, resource = request_args[:2]
         headers = _parse_headers(header_lines)
         is_closing = headers.get('Connection', 'close') == 'close'
@@ -181,23 +194,15 @@ class DIYHTTPServer(object):
         ]
         return method, resource, response_headers
 
-    def _write_get_or_head_response(self, writer, document_path,
-                                    headers,
-                                    with_body):
+    def _create_get_or_head_response(self, document_path, headers):
         full_path = os.path.join(self.root, document_path)
         exists = os.path.exists(full_path)
         escaped = exists and '/..' in full_path
         absent_index = not exists and document_path.endswith('index.html')
         if escaped or absent_index:
-            response = _generate_response_lines(
-                HttpCode.FORBIDDEN, headers + PLAIN_TEXT_EMPTY_CONTENT)
-            writer.write(response)
-            return
+            return HttpCode.FORBIDDEN, headers + PLAIN_TEXT_EMPTY_CONTENT
         if not exists:
-            response = _generate_response_lines(
-                HttpCode.NOT_FOUND, headers + PLAIN_TEXT_EMPTY_CONTENT)
-            writer.write(response)
-            return
+            return HttpCode.NOT_FOUND, headers + PLAIN_TEXT_EMPTY_CONTENT
 
         path = os.path.join(self.root, document_path)
         content_length = os.path.getsize(path)
@@ -206,19 +211,12 @@ class DIYHTTPServer(object):
             f'Content-Length: {content_length}',
             f'Content-Type: {content_type}'
         ])
-        response_lines = _generate_response_lines(HttpCode.OK, headers)
-        if with_body:
-            with open(os.path.join(self.root, path), 'rb') as fd:
-                try:
-                    contents = fd.read()
-                except IOError as e:
-                    logging.error('Error on reading requested file contents.')
-                    logging.exception(e)
-                    raise
-                writer.write(response_lines)
-                writer.write(contents)
-        else:
-            writer.write(response_lines)
+        return HttpCode.OK, headers
+
+    async def _read_data(self, file):
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, file.read)
+        return data
 
 
 if __name__ == "__main__":
