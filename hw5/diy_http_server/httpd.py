@@ -153,10 +153,10 @@ class DIYHTTPServer(object):
                 if method in ['GET', 'HEAD']:
                     code, headers = self._create_get_or_head_response(
                         path, response_headers)
-                    if method == 'GET':
+                    if method == 'GET' and code == HttpCode.OK:
                         with open(os.path.join(self.root, path), 'rb') as fd:
                             try:
-                                content = self._read_data(fd)
+                                content = await self._read_data(fd)
                             except IOError:
                                 logging.error('Error on reading requested file %s contents.', path)
                                 raise
@@ -199,9 +199,9 @@ class DIYHTTPServer(object):
         exists = os.path.exists(full_path)
         escaped = exists and '/..' in full_path
         absent_index = not exists and document_path.endswith('index.html')
-        if escaped or absent_index:
+        if escaped:
             return HttpCode.FORBIDDEN, headers + PLAIN_TEXT_EMPTY_CONTENT
-        if not exists:
+        if not exists or absent_index:
             return HttpCode.NOT_FOUND, headers + PLAIN_TEXT_EMPTY_CONTENT
 
         path = os.path.join(self.root, document_path)
@@ -213,10 +213,9 @@ class DIYHTTPServer(object):
         ])
         return HttpCode.OK, headers
 
-    async def _read_data(self, file):
+    def _read_data(self, file):
         loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, file.read)
-        return data
+        return loop.run_in_executor(None, file.read)
 
 
 if __name__ == "__main__":
